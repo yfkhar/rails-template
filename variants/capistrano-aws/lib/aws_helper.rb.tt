@@ -1,0 +1,155 @@
+require "aws-sdk-ec2"
+require "dotenv/load"
+require "active_support/core_ext/string"
+
+class AwsHelper # rubocop:disable Metrics/ClassLength
+  class AwsHelperError < StandardError; end
+
+  AWS_ENV_NAMES = %i[uat production disaster_recovery].freeze
+  SYDNEY_AWS_REGION = "ap-southeast-2".freeze
+  SINGAPORE_AWS_REGION = "ap-southeast-1".freeze
+
+  def initialize(capistrano_env_name, shell_env = ENV, logger = Logger.new(STDOUT))
+    @logger = logger
+    @shell_env = shell_env
+    @env_name = capistrano_env_name
+    @env_name_upcased = capistrano_env_name.upcase
+  end
+
+  def bastion_host
+    region = case @env_name
+             when :disaster_recovery
+               SINGAPORE_AWS_REGION
+             else
+               SYDNEY_AWS_REGION
+             end
+
+    bastion_host_ip_for(region: region)
+  end
+
+  def bastion_user
+    "ubuntu"
+  end
+
+  def build_ssh_command
+    "ssh #{bastion_user}@#{bastion_host} -W %h:%p"
+  rescue StandardError => e
+    log <<~EO_ERROR
+
+      I failed to setup Capistrano to deploy through a bastion host so I cannot continue.
+
+      The error I found was: #{e.inspect}
+    EO_ERROR
+    raise AwsHelperError
+  end
+
+  ##
+  # Find all EC2 instances in both Sydney and Singapore which have a 'Name' tag
+  # indicating they are one of our Rails application servers
+  #
+  # @return [Array<String>] An array of hostnames e.g.
+  #   ["ip-10-3-46-182.ap-southeast-1.compute.internal", "ip-10-3-68-167.ap-southeast-1.compute.internal"]
+  #
+  def vpc_internal_dns_names # rubocop:disable Metrics/MethodLength
+    internal_dns_names_for(region: SYDNEY_AWS_REGION) + internal_dns_names_for(region: SINGAPORE_AWS_REGION)
+  rescue StandardError => e
+    # Many things could go wrong here while digging into the expected responses from AWS
+    log <<~EO_ERROR
+
+      I failed to discover the AWS internal DNS name of the server to deploy to so
+      I cannot complete the deployment.
+
+      The error I found was: #{e.inspect}
+
+      This is what I found when I looked for AWS credentials in the environment
+      variables:
+
+        DEPLOYMENT_AWS_ACCESS_KEY_ID: #{@shell_env["DEPLOYMENT_AWS_ACCESS_KEY_ID"]}
+        DEPLOYMENT_AWS_SECRET_ACCESS_KEY: #{@shell_env["DEPLOYMENT_AWS_SECRET_ACCESS_KEY"]}
+
+      If these are not correct then you should fix that. Otherwise this may have
+      been caused by:
+
+      * a network error
+      * the server not running
+
+      so you should check those too. Good luck!
+
+    EO_ERROR
+    raise AwsHelperError
+  end
+
+  private
+
+  def searchable_env_name
+    @env_name.to_s.dasherize
+  end
+
+  ##
+  # @param [String] region - The AWS region that we should search for EC2 instances within
+  # @return [Array<String>] An array of hostnames e.g.
+  #    ["ip-10-3-46-182.ap-southeast-1.compute.internal", "ip-10-3-68-167.ap-southeast-1.compute.internal"]
+  #
+  def internal_dns_names_for(region:) # rubocop:disable Metrics/MethodLength
+    ec2 = Aws::EC2::Client.new(
+      region:            region,
+      access_key_id:     @shell_env["DEPLOYMENT_AWS_ACCESS_KEY_ID"],
+      secret_access_key: @shell_env["DEPLOYMENT_AWS_SECRET_ACCESS_KEY"]
+    )
+
+    resp = ec2.describe_instances(
+      filters: [
+        {
+          name: "tag:Name",
+          values: [
+            "#{ENV["APP_NAME"]}-#{searchable_env_name}-app-server",
+            "#{ENV["APP_NAME"]}-#{searchable_env_name}-asg-app-server"
+          ]
+        },
+        {
+          name: "instance-state-name",
+          values: ["running"]
+        }
+      ]
+    )
+
+    names = resp.reservations.map { |reservation| reservation.instances[0].private_dns_name }
+
+    log "In AWS regions '#{region}' I found the following app server(s): #{names.join(", ")}"
+
+    names
+  end
+
+  def bastion_host_ip_for(region:) # rubocop:disable Metrics/MethodLength
+    ec2 = Aws::EC2::Client.new(
+      region:            region,
+      access_key_id:     @shell_env["DEPLOYMENT_AWS_ACCESS_KEY_ID"],
+      secret_access_key: @shell_env["DEPLOYMENT_AWS_SECRET_ACCESS_KEY"]
+    )
+
+    resp = ec2.describe_instances(
+      filters: [
+        {
+          name: "tag:Name",
+          values: [
+            "#{ENV["APP_NAME"]}-#{searchable_env_name}-bastion-host"
+          ]
+        },
+        {
+          name: "instance-state-name",
+          values: ["running"]
+        }
+      ]
+    )
+
+    ip_address = resp.reservations.map { |reservation| reservation.instances[0].public_ip_address }.first
+
+    log "In AWS regions '#{region}' for environment '#{searchable_env_name}', I found bastion: #{ip_address}"
+
+    ip_address
+  end
+
+  def log(msg)
+    @logger.info msg
+  end
+end

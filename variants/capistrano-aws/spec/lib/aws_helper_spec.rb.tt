@@ -1,0 +1,134 @@
+require "spec_helper"
+require_relative "../../lib/aws_helper"
+
+RSpec.describe "AwsHelper" do
+  let(:capistrano_env) { "fake_env" }
+  let(:valid_shell_env) { {} }
+
+  describe "#build_ssh_command" do
+    let(:host) { "example.com" }
+    let(:user) { "ubuntu" }
+    let(:expected_bastion_host_ip) { "127.0.0.123" }
+    let(:successful_ec2_client) do
+      sydney_ret_val = OpenStruct.new(
+        reservations: [
+          OpenStruct.new(
+            instances: [
+              OpenStruct.new(public_ip_address: expected_bastion_host_ip)
+            ]
+          )
+        ]
+      )
+
+      client = instance_double(Aws::EC2::Client)
+      allow(client).to receive(:describe_instances).and_return(sydney_ret_val)
+      client
+    end
+
+    context "when the AWS client succeeds" do
+      before(:each) do
+        allow(Aws::EC2::Client).to receive(:new).and_return(successful_ec2_client)
+        @log_output = ""
+        @subject = AwsHelper.new(capistrano_env, valid_shell_env, build_capturing_logger(@log_output))
+      end
+
+      it "returns the expected string (which is later used to configure Capistrano SSH)" do
+        result = @subject.build_ssh_command
+        expect(result).to match(/ssh #{user}@#{expected_bastion_host_ip}/)
+      end
+    end
+
+    context "When the AWS client fails" do
+      let(:failing_ec2_client) do
+        client = instance_double(Aws::EC2::Client)
+        allow(client).to receive(:describe_instances).and_raise(AwsHelper::SafeplusAwsHelperError)
+        client
+      end
+
+      before(:each) do
+        allow(Aws::EC2::Client).to receive(:new).and_return(failing_ec2_client)
+        @log_output = ""
+        @subject = AwsHelper.new(capistrano_env,
+                                         valid_shell_env,
+                                         build_capturing_logger(@log_output))
+      end
+
+      it "informs the user about the error and stops the program" do
+        expect { @subject.build_ssh_command }.to raise_error AwsHelper::SafeplusAwsHelperError
+        expect(@log_output).to match(/failed to setup Capistrano/)
+      end
+    end
+  end
+
+  describe "#vpc_internal_dns_names" do
+    context "When all required shell environment variables are present" do
+      let(:expected_result) { ["expected.name.example.com", "otherexpected.name.example.com"] }
+      let(:successful_ec2_client) do
+        # The shape of the return value is
+        #   reservations[0].instances[0].private_dns_name
+        sydney_ret_val = OpenStruct.new(
+          reservations: [
+            OpenStruct.new(
+              instances: [
+                OpenStruct.new(private_dns_name: expected_result[0])
+              ]
+            ),
+            OpenStruct.new(
+              instances: [
+                OpenStruct.new(private_dns_name: expected_result[1])
+              ]
+            )
+          ]
+        )
+
+        singapore_ret_val = OpenStruct.new(reservations: [])
+
+        client = instance_double(Aws::EC2::Client)
+        allow(client).to receive(:describe_instances).and_return(sydney_ret_val, singapore_ret_val)
+        client
+      end
+
+      before(:each) do
+        allow(Aws::EC2::Client).to receive(:new).and_return(successful_ec2_client)
+        @log_output = ""
+        @subject = AwsHelper.new(capistrano_env,
+                                         valid_shell_env,
+                                         build_capturing_logger(@log_output))
+      end
+
+      it "returns the expected string" do
+        result = @subject.vpc_internal_dns_names
+        expect(result).to eq(expected_result)
+      end
+    end
+
+    context "When the AWS client fails" do
+      let(:failing_ec2_client) do
+        client = instance_double(Aws::EC2::Client)
+        allow(client).to receive(:describe_instances).and_raise(AwsHelper::SafeplusAwsHelperError)
+        client
+      end
+
+      before(:each) do
+        allow(Aws::EC2::Client).to receive(:new).and_return(failing_ec2_client)
+        @log_output = ""
+        @subject = AwsHelper.new(capistrano_env,
+                                         valid_shell_env,
+                                         build_capturing_logger(@log_output))
+      end
+
+      it "informs the user about the error and stops the program" do
+        expect { @subject.vpc_internal_dns_names }.to raise_error AwsHelper::SafeplusAwsHelperError
+        expect(@log_output).to match(/I failed to discover the AWS internal DNS name/)
+      end
+    end
+  end
+
+  ##
+  # Build a ruby Logger object which will store every message sent to it in
+  # the provided String rather than printing it to a file or console.
+  #
+  def build_capturing_logger(str)
+    Logger.new(StringIO.new(str))
+  end
+end

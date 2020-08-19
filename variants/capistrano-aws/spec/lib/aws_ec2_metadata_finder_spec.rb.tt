@@ -1,0 +1,64 @@
+require "spec_helper"
+require_relative "../../lib/aws_ec2_metadata_finder"
+
+RSpec.describe AwsEc2MetadataFinder do
+  subject { AwsEc2MetadataFinder.new }
+
+  describe "#local_ipv4" do
+    context "When running on AWS (with the AWS metadata endpoint available)" do
+      let(:expected_local_ipv4_value) { "1.2.3.4" }
+      let(:response) { instance_double("Faraday::Response", body: expected_local_ipv4_value) }
+      let(:connection) { instance_double("Faraday::Connection", get: response) }
+
+      before(:each) do
+        allow(Faraday).to receive(:new).and_return(connection)
+      end
+
+      it "correctly finds the AWS EC2 local IPV4 address" do
+        expect(subject.local_ipv4).to eq(expected_local_ipv4_value)
+      end
+    end
+
+    context "When not running on AWS" do
+      let(:connection) { instance_double("Faraday::Connection") }
+
+      before(:each) do
+        allow(Faraday).to receive(:new).and_return(connection)
+        allow(connection).to receive(:get).and_raise(Faraday::Error)
+      end
+
+      it "returns the appropriate 'missing value' string" do
+        expect(subject.local_ipv4).to eq(AwsEc2MetadataFinder::MISSING_IPV4)
+      end
+    end
+  end
+
+  describe "#instance_id" do
+    context "When running on AWS (with the AWS metadata endpoint available)" do
+      let(:expected_instance_id) { "id-abc123123123" }
+      let(:response) { instance_double("Faraday::Response", body: expected_instance_id) }
+      let(:connection) { instance_double("Faraday::Connection", get: response) }
+
+      before(:each) do
+        allow(Faraday).to receive(:new).and_return(connection)
+      end
+
+      it "correctly finds the AWS EC2 local IPV4 address" do
+        expect(subject.instance_id).to eq(expected_instance_id)
+      end
+    end
+
+    context "When not running on AWS" do
+      let(:connection) { instance_double("Faraday::Connection") }
+
+      before(:each) do
+        allow(Faraday).to receive(:new).and_return(connection)
+        allow(connection).to receive(:get).and_raise(Faraday::Error)
+      end
+
+      it "returns the appropriate 'missing value' string" do
+        expect(subject.instance_id).to eq(AwsEc2MetadataFinder::MISSING_INSTANCE_ID)
+      end
+    end
+  end
+end

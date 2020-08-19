@@ -1,0 +1,41 @@
+require 'faraday'
+
+class AwsEc2MetadataFinder
+  MISSING_INSTANCE_ID = 'FAILED_TO_FIND_EC2_INSTANCE_ID'.freeze
+  MISSING_IPV4        = 'FAILED_TO_FIND_LOCAL_IPV4'.freeze
+
+  # We do not want to delay the starting of the Rails app too much **and** we
+  # expect the response from the EC2 metadata to be prompt so we set quite
+  # agressive timeouts.
+  HTTP_CONNECTION_TIMEOUT = 5 # seconds
+  HTTP_RESPONSE_TIMEOUT   = 5 # seconds
+
+  def initialize
+    @failed_connection = false
+    @conn = Faraday.new('http://169.254.169.254') do |faraday| # TODO: make URL and ENV?
+      faraday.adapter(Faraday.default_adapter) # make requests with Net::HTTP
+      faraday.options.timeout = HTTP_CONNECTION_TIMEOUT
+      faraday.options.open_timeout = HTTP_RESPONSE_TIMEOUT
+    end
+  rescue StandardError
+    @failed_connection = true
+  end
+
+  def local_ipv4
+    return MISSING_IPV4 if @failed_connection
+
+    response = @conn.get('/latest/meta-data/local-ipv4')
+    response.body
+  rescue StandardError
+    MISSING_IPV4
+  end
+
+  def instance_id
+    return MISSING_INSTANCE_ID if @failed_connection
+
+    response = @conn.get('/latest/meta-data/instance-id')
+    response.body
+  rescue StandardError
+    MISSING_INSTANCE_ID
+  end
+end

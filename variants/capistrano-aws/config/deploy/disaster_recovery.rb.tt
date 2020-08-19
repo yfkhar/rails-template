@@ -1,0 +1,15 @@
+set :rails_env, "disaster_recovery"
+set :branch, "production"
+
+##
+# We use the CAPISTRANO_DEPLOY_TO_LOCAL_DIR environment variable to signal to
+# Capistrano that it should deploy to the same server it is run on. This covers
+# the use-case where we run Capistrano after Chef to provision a server.
+#
+if ENV["CAPISTRANO_DEPLOY_TO_LOCAL_DIR"]
+  server "localhost", roles: %w[app]
+else
+  aws_helper = AwsHelper.new("disaster_recovery")
+  set :ssh_options, proxy: Net::SSH::Proxy::Command.new(aws_helper.build_ssh_command)
+  role(:app, aws_helper.vpc_internal_dns_names, user: "deploy")
+end
