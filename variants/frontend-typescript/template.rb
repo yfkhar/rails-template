@@ -15,6 +15,18 @@ types_packages = %w[
   webpack-env
   eslint
   babel__core
+  babel__plugin-transform-runtime
+  babel__preset-env
+  babel__runtime
+  babel-loader
+  compression-webpack-plugin
+  terser-webpack-plugin
+  webpack
+  webpack-assets-manifest
+  webpack-cli
+  webpack-merge
+  webpack-sources
+  webpack-dev-server
 ].map { |name| "@types/#{name}" }
 
 run "yarn remove prop-types"
